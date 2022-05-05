@@ -1,16 +1,75 @@
 use bevy::{
-    prelude::{FromWorld, World},
+    core_pipeline,
+    prelude::{App, FromWorld, Plugin, QueryState, With, World},
     render::{
-        render_graph::{Node, NodeRunError, RenderGraphContext},
-        render_resource::{RenderPipeline, TextureFormat},
+        mesh::PrimitiveTopology,
+        render_graph::{Node, NodeRunError, RenderGraph, RenderGraphContext, SlotInfo},
+        render_resource::{
+            BlendComponent, BlendState, ColorTargetState, ColorWrites, Face, FrontFace, LoadOp,
+            MultisampleState, Operations, PipelineLayoutDescriptor, PolygonMode, PrimitiveState,
+            RawFragmentState, RawRenderPipelineDescriptor, RawVertexState, RenderPassDescriptor,
+            RenderPipeline, ShaderModuleDescriptor, ShaderSource, TextureFormat,
+        },
         renderer::{RenderContext, RenderDevice},
         texture::BevyDefault,
-        view::ExtractedWindows,
+        view::{ExtractedView, ViewTarget},
+        RenderApp,
     },
 };
-use bevy::window::WindowId;
 
+pub const BACKGROUND_GRAPH: &str = "background_graph";
 pub const BACKGROUND_NODE: &str = "background_node";
+pub const BACKGROUND_PASS_DRIVER: &str = "background_pass_driver";
+
+#[derive(Default)]
+pub struct BackgroundNodePlugin;
+
+impl Plugin for BackgroundNodePlugin {
+    fn build(&self, app: &mut App) {
+        let render_app = app.sub_app_mut(RenderApp);
+        render_app.init_resource::<BackgroundPipeline>();
+        let background_node = BackgroundNode::new(&mut render_app.world);
+        let mut graph = render_app.world.get_resource_mut::<RenderGraph>().unwrap();
+
+        let mut background_graph = RenderGraph::default();
+        background_graph.add_node(BACKGROUND_NODE, background_node);
+        graph.add_sub_graph(BACKGROUND_GRAPH, background_graph);
+
+        graph.add_node(BACKGROUND_PASS_DRIVER, BackgroundPassDriverNode);
+        graph
+            .add_node_edge(
+                core_pipeline::node::CLEAR_PASS_DRIVER,
+                BACKGROUND_PASS_DRIVER,
+            )
+            .unwrap();
+        graph
+            .add_node_edge(
+                core_pipeline::node::MAIN_PASS_DEPENDENCIES,
+                BACKGROUND_PASS_DRIVER,
+            )
+            .unwrap();
+        graph
+            .add_node_edge(
+                BACKGROUND_PASS_DRIVER,
+                core_pipeline::node::MAIN_PASS_DRIVER,
+            )
+            .unwrap();
+        graph
+            .remove_node_edge(
+                core_pipeline::node::CLEAR_PASS_DRIVER,
+                core_pipeline::node::MAIN_PASS_DRIVER,
+            )
+            .unwrap();
+        graph
+            .remove_node_edge(
+                core_pipeline::node::MAIN_PASS_DEPENDENCIES,
+                core_pipeline::node::MAIN_PASS_DRIVER,
+            )
+            .unwrap();
+
+        // bevy_mod_debugdump::print_render_graph(app);
+    }
+}
 
 pub struct BackgroundPipeline {
     render_pipeline: RenderPipeline,
@@ -18,54 +77,53 @@ pub struct BackgroundPipeline {
 
 impl FromWorld for BackgroundPipeline {
     fn from_world(world: &mut bevy::prelude::World) -> Self {
-        let device = world.get_resource::<RenderDevice>().unwrap();
-        let shader = device.create_shader_module(&wgpu::ShaderModuleDescriptor {
+        let device = world.resource::<RenderDevice>();
+        let shader = device.create_shader_module(&ShaderModuleDescriptor {
             label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            source: ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
-        let render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[],
-                push_constant_ranges: &[],
-            });
+        let render_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        });
 
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let render_pipeline = device.create_render_pipeline(&RawRenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
+            vertex: RawVertexState {
                 module: &shader,
                 entry_point: "vs_main",
                 buffers: &[],
             },
-            fragment: Some(wgpu::FragmentState {
+            fragment: Some(RawFragmentState {
                 module: &shader,
                 entry_point: "fs_main",
-                targets: &[wgpu::ColorTargetState {
+                targets: &[ColorTargetState {
                     format: TextureFormat::bevy_default(),
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent::REPLACE,
-                        alpha: wgpu::BlendComponent::REPLACE,
+                    blend: Some(BlendState {
+                        color: BlendComponent::REPLACE,
+                        alpha: BlendComponent::REPLACE,
                     }),
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: ColorWrites::ALL,
                 }],
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
                 strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                front_face: FrontFace::Ccw,
+                cull_mode: Some(Face::Back),
                 // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-                polygon_mode: wgpu::PolygonMode::Fill,
+                polygon_mode: PolygonMode::Fill,
                 // Requires Features::DEPTH_CLIP_CONTROL
                 unclipped_depth: false,
                 // Requires Features::CONSERVATIVE_RASTERIZATION
                 conservative: false,
             },
             depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
+            multisample: MultisampleState {
+                count: 4,
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
@@ -78,48 +136,66 @@ impl FromWorld for BackgroundPipeline {
     }
 }
 
-#[derive(Default)]
-pub struct BackgroundNode;
+pub struct BackgroundPassDriverNode;
 
-impl Node for BackgroundNode {
+impl Node for BackgroundPassDriverNode {
     fn run(
         &self,
         graph: &mut RenderGraphContext,
+        _render_context: &mut RenderContext,
+        _world: &World,
+    ) -> Result<(), NodeRunError> {
+        graph.run_sub_graph(BACKGROUND_GRAPH, vec![])?;
+
+        Ok(())
+    }
+}
+
+pub struct BackgroundNode {
+    query: QueryState<&'static ViewTarget, With<ExtractedView>>,
+}
+
+impl BackgroundNode {
+    pub fn new(world: &mut World) -> Self {
+        Self {
+            query: QueryState::new(world),
+        }
+    }
+}
+
+impl Node for BackgroundNode {
+    fn input(&self) -> Vec<SlotInfo> {
+        vec![]
+    }
+
+    fn update(&mut self, world: &mut World) {
+        self.query.update_archetypes(world);
+    }
+
+    fn run(
+        &self,
+        _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext,
         world: &World,
     ) -> Result<(), NodeRunError> {
-        let pipeline = world.get_resource::<BackgroundPipeline>().unwrap();
-        let extracted_window =
-            &world.get_resource::<ExtractedWindows>().unwrap().windows[&WindowId::primary()];
+        for target in self.query.iter_manual(world) {
+            let pipeline = world.get_resource::<BackgroundPipeline>().unwrap();
+            let pass_descriptor = RenderPassDescriptor {
+                label: Some("background_pass"),
+                color_attachments: &[target.get_color_attachment(Operations {
+                    load: LoadOp::Load,
+                    store: true,
+                })],
+                depth_stencil_attachment: None,
+            };
 
-        let swap_chain_texture = extracted_window
-            .swap_chain_texture
-            .as_ref()
-            .unwrap()
-            .clone();
-        let mut render_pass =
-            render_context
+            let mut render_pass = render_context
                 .command_encoder
-                .begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Render Pass"),
-                    color_attachments: &[wgpu::RenderPassColorAttachment {
-                        view: &swap_chain_texture,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.1,
-                                g: 0.2,
-                                b: 0.3,
-                                a: 1.0,
-                            }),
-                            store: true,
-                        },
-                    }],
-                    depth_stencil_attachment: None,
-                });
+                .begin_render_pass(&pass_descriptor);
 
-        render_pass.set_pipeline(&pipeline.render_pipeline);
-        render_pass.draw(0..3, 0..1);
+            render_pass.set_pipeline(&pipeline.render_pipeline);
+            render_pass.draw(0..3, 0..1);
+        }
 
         Ok(())
     }

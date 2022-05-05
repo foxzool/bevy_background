@@ -1,53 +1,16 @@
-use background_node::{BackgroundNode, BackgroundPipeline, BACKGROUND_NODE};
-use bevy::{
-    core_pipeline::node,
-    prelude::*,
-    render::{render_graph::RenderGraph, RenderApp},
-};
+use background_node::BackgroundNodePlugin;
 use bevy::log::LogPlugin;
+use bevy::prelude::*;
 
 mod background_node;
 
 fn main() {
-    let mut app = App::new();
-    app.insert_resource(Msaa { samples: 4 })
+    App::new()
+        // .insert_resource(Msaa { samples: 4 })
         .add_plugins_with(DefaultPlugins, |plugins| plugins.disable::<LogPlugin>())
-
-        .add_startup_system(setup);
-
-    let render_app = app.sub_app_mut(RenderApp);
-    render_app.init_resource::<BackgroundPipeline>();
-    let mut graph = render_app.world.get_resource_mut::<RenderGraph>().unwrap();
-
-    graph.add_node(BACKGROUND_NODE, BackgroundNode::default());
-    graph
-        .add_node_edge(node::MAIN_PASS_DEPENDENCIES, BACKGROUND_NODE)
-        .unwrap();
-
-
-    // it's now work before main pass
-    graph
-        .add_node_edge(node::CLEAR_PASS_DRIVER, BACKGROUND_NODE)
-        .unwrap();
-    graph
-        .add_node_edge(BACKGROUND_NODE, node::MAIN_PASS_DRIVER)
-        .unwrap();
-    graph
-        .remove_node_edge(node::CLEAR_PASS_DRIVER, node::MAIN_PASS_DRIVER)
-        .unwrap();
-    graph
-        .remove_node_edge(node::MAIN_PASS_DEPENDENCIES, node::MAIN_PASS_DRIVER)
-        .unwrap();
-
-
-    // it's worked after main pass
-    // graph
-    // .add_node_edge(node::MAIN_PASS_DRIVER, BACKGROUND_NODE)
-    // .unwrap();
-
-    // bevy_mod_debugdump::print_render_graph(&mut app);
-
-    app.run();
+        .add_plugin(BackgroundNodePlugin)
+        .add_startup_system(setup)
+        .run();
 }
 
 /// set up a simple 3D scene

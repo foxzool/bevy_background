@@ -7,6 +7,5 @@ edition = "2021"
 
 [dependencies]
 bevy = "0.7"
-wgpu = "0.12"
 
 bevy_mod_debugdump = "0.4.0"
